@@ -4,4 +4,5 @@
   `(do
      (~'draw-cur-piece false)
      ~@body
-     (~'draw-cur-piece true)))
+     (~'draw-cur-piece true)
+     (reset! ~'lock-delay-timer 30)))

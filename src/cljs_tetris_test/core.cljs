@@ -8,6 +8,8 @@
 (def field (r/atom (vec (repeat 20 (vec (repeat 10 "black"))))))
 (def cur-piece (atom nil))
 
+(def lock-delay-timer (atom 0))
+
 (defn rand-piece-kind []
   (rand-nth [:i :o :s :z :j :l :t]))
 
@@ -63,12 +65,24 @@
   (draw-piece (get-shadow-piece @cur-piece) on)
   (draw-piece @cur-piece on))
 
-(defn frame-update-cur-piece []
-  (if (some? @cur-piece)
+(defn hard-drop-cur-piece []
+  (when (some? @cur-piece)
+    (while (piece-can-fall @cur-piece)
+      (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))))
+  (spawn-piece))
+
+(defn frame-update []
+  (when (> @lock-delay-timer 0)
+    (swap! lock-delay-timer dec)
+    (when (zero? @lock-delay-timer)
+      (hard-drop-cur-piece))))
+
+(defn frame-drop-cur-piece []
+  (when (some? @cur-piece)
     (if (piece-can-fall @cur-piece)
       (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))
-      (reset! cur-piece nil))
-    (spawn-piece)))
+      (when (zero? @lock-delay-timer)
+        (reset! lock-delay-timer 30)))))
 
 (defn move-cur-piece-x [dir]
   (when (some? @cur-piece)
@@ -101,15 +115,10 @@
   (rotate-cur-piece coord-rotate-cw)
   (rotate-cur-piece coord-rotate-cw))
 
-(defn hard-drop-cur-piece []
-  (when (some? @cur-piece)
-    (while (piece-can-fall @cur-piece)
-      (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))))
-  (spawn-piece))
-
 ;; timers
 
-(defonce cur-piece-updater (js/setInterval frame-update-cur-piece 200))
+(defonce frame-updater (js/setInterval frame-update 16))
+(defonce cur-piece-updater (js/setInterval frame-drop-cur-piece 250))
 
 ;; event handlers
 
