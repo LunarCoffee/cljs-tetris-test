@@ -5,9 +5,7 @@
   (:require-macros
    [cljs-tetris-test.macros :as mc]))
 
-;; logic
-
-(def field (r/atom (vec (repeat 20 (vec (repeat 10 :black))))))
+(def field (r/atom (vec (repeat 20 (vec (repeat 10 "black"))))))
 (def cur-piece (atom nil))
 
 (defn rand-piece-kind []
@@ -25,45 +23,60 @@
 
 (defn piece-color [piece-kind]
   (case piece-kind
-    :i :cyan
-    :o :yellow
-    :s :lime
-    :z :red
-    :j :blue
-    :l :orange
-    :t :magenta))
+    :i "cyan"
+    :o "yellow"
+    :s "lime"
+    :z "red"
+    :j "blue"
+    :l "orange"
+    :t "magenta"
+    :shadow "#222"))
 
 (defn spawn-piece []
   (let [kind (rand-piece-kind)]
     (reset! cur-piece [kind (piece-start-pos kind)])))
 
+(defn move-piece [piece dir shift-fn]
+  (update piece 1 (partial map #(update % dir shift-fn))))
+
+(defn space-available-for-piece [old new coord-bounds]
+  (and (every? coord-bounds (map last (last new)))
+       (every? #(or (some #{(get-in @field %)} ["black" "#222"])
+                    (some #{%} (last old)))
+               (last new))))
+
+(defn piece-can-fall [piece]
+  (let [updated (move-piece piece 0 inc)]
+    (space-available-for-piece piece updated #(< % 20))))
+
+(defn get-shadow-piece [piece]
+  (if (piece-can-fall piece)
+    (recur (move-piece piece 0 inc))
+    (assoc piece 0 :shadow)))
+
+(defn draw-piece [piece on]
+  (let [color (if on (piece-color (first piece)) "black")]
+    (doseq [coords (last piece)]
+      (swap! field assoc-in coords color))))
+
+;; draw the current piece and its shadow
 (defn update-field-cur-piece [on]  ;; used in macros.clj (FIXME ?)
   (if (some? @cur-piece)
-    (let [color (if on (piece-color (first @cur-piece)) :black)]
-      (doseq [coords (last @cur-piece)]
-        (swap! field assoc-in coords color)))
+    (do
+      (draw-piece (get-shadow-piece @cur-piece) on)
+      (draw-piece @cur-piece on))
     (spawn-piece)))
-
-(defn move-cur-piece [dir shift-fn]
-  (update @cur-piece 1 (partial map #(update % dir shift-fn))))
-
-(defn cur-piece-can-fall []
-  (let [updated (move-cur-piece 0 inc)]
-    (and (every? #(< % 20) (map first (last updated)))
-         (every? #(or (= :black (get-in @field %))    ;; empty below
-                      (some #{%} (last @cur-piece)))  ;; piece previously occupied
-                 (last updated)))))
 
 (defn frame-update-cur-piece []
   (if (some? @cur-piece)
-    (if (cur-piece-can-fall)
-      (mc/with-cur-piece (reset! cur-piece (move-cur-piece 0 inc)))
+    (if (piece-can-fall @cur-piece)
+      (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))
       (reset! cur-piece nil))
     (spawn-piece)))
 
 (defn move-cur-piece-x [dir]
-  (let [updated (move-cur-piece 1 dir)]
-    (when (every? #(< -1 % 10) (map last (last updated)))
+  (let [updated (move-piece @cur-piece 1 dir)]
+    (when (space-available-for-piece @cur-piece updated #(< -1 % 10))
       (mc/with-cur-piece (reset! cur-piece updated)))))
 
 (defn cur-piece-center-coords []
@@ -78,7 +91,6 @@
 (defn rotate-cur-piece [dir]
   (when (not= :o (first @cur-piece))
     (let [center (get (vec (last @cur-piece)) (cur-piece-center-coords))]
-      (.log js/console (str (vec (last @cur-piece))))
       (mc/with-cur-piece
         (swap! cur-piece update 1
                (partial map #(coord+ center (dir (coord- % center)))))))))
@@ -88,9 +100,9 @@
   (rotate-cur-piece coord-rotate-cw))
 
 (defn hard-drop-cur-piece []
-  (while (cur-piece-can-fall)
-    (mc/with-cur-piece (reset! cur-piece (move-cur-piece 0 inc))))
-  (spawn-piece))  ;; TODO lmao
+  (while (piece-can-fall @cur-piece)
+    (mc/with-cur-piece (swap! cur-piece move-piece 0 inc)))
+  (spawn-piece))
 
 ;; timers
 
@@ -105,7 +117,8 @@
     "ArrowUp" (rotate-cur-piece coord-rotate-cw)
     "s" (rotate-cur-piece coord-rotate-ccw)
     "a" (flip-cur-piece)
-    " " (hard-drop-cur-piece)))
+    " " (hard-drop-cur-piece)
+    (.log js/console (str "unhandled key " (.-key e)))))
 
 ;; components
 
@@ -116,7 +129,7 @@
 (defn playfield-row [row]
   [:div {:class "playfield-row"}
    (for [[i cell] (map-indexed vector row)]
-     ^{:key i} [block (name cell)])])
+     ^{:key i} [block cell])])
 
 (defn playfield [field]
   [:div {:class "playfield"
