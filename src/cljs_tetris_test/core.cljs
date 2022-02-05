@@ -39,15 +39,15 @@
 (defn move-piece [piece dir shift-fn]
   (update piece 1 (partial map #(update % dir shift-fn))))
 
-(defn space-available-for-piece [old new coord-bounds]
-  (and (every? coord-bounds (map last (last new)))
+(defn piece-has-space [old new coord-bounds]
+  (and (every? coord-bounds (last new))
        (every? #(or (some #{(get-in @field %)} ["black" "#222"])
                     (some #{%} (last old)))
                (last new))))
 
 (defn piece-can-fall [piece]
   (let [updated (move-piece piece 0 inc)]
-    (space-available-for-piece piece updated #(< % 20))))
+    (piece-has-space piece updated #(< (first %) 20))))
 
 (defn get-shadow-piece [piece]
   (if (piece-can-fall piece)
@@ -59,13 +59,9 @@
     (doseq [coords (last piece)]
       (swap! field assoc-in coords color))))
 
-;; draw the current piece and its shadow
-(defn update-field-cur-piece [on]  ;; used in macros.clj (FIXME ?)
-  (if (some? @cur-piece)
-    (do
-      (draw-piece (get-shadow-piece @cur-piece) on)
-      (draw-piece @cur-piece on))
-    (spawn-piece)))
+(defn draw-cur-piece [on]  ;; used in macros.clj (FIXME ?)
+  (draw-piece (get-shadow-piece @cur-piece) on)
+  (draw-piece @cur-piece on))
 
 (defn frame-update-cur-piece []
   (if (some? @cur-piece)
@@ -75,12 +71,13 @@
     (spawn-piece)))
 
 (defn move-cur-piece-x [dir]
-  (let [updated (move-piece @cur-piece 1 dir)]
-    (when (space-available-for-piece @cur-piece updated #(< -1 % 10))
-      (mc/with-cur-piece (reset! cur-piece updated)))))
+  (when (some? @cur-piece)
+    (let [updated (move-piece @cur-piece 1 dir)]
+      (when (piece-has-space @cur-piece updated #(< -1 (last %) 10))
+        (mc/with-cur-piece (reset! cur-piece updated))))))
 
-(defn cur-piece-center-coords []
-  (if (= :s (first @cur-piece)) 3 2))  ;; non-standard pivot for i piece :(
+(defn piece-center-coords [piece]
+  (if (= :s (first piece)) 3 2))  ;; non-standard pivot for i piece :(
 
 (defn coord- [[a b] [c d]] [(- a c) (- b d)])
 (defn coord+ [[a b] [c d]] [(+ a c) (+ b d)])
@@ -88,20 +85,26 @@
 (defn coord-rotate-cw [[a b]] [b (- a)])
 (defn coord-rotate-ccw [[a b]] [(- b) a])
 
+(defn rotate-piece [piece dir]
+  (let [center (get (vec (last piece)) (piece-center-coords piece))]
+    (update piece 1 (partial map #(coord+ center (dir (coord- % center)))))))
+
 (defn rotate-cur-piece [dir]
-  (when (not= :o (first @cur-piece))
-    (let [center (get (vec (last @cur-piece)) (cur-piece-center-coords))]
-      (mc/with-cur-piece
-        (swap! cur-piece update 1
-               (partial map #(coord+ center (dir (coord- % center)))))))))
+  (when (and (some? @cur-piece) (not= :o (first @cur-piece)))
+    (let [updated (rotate-piece @cur-piece dir)]
+      (when (piece-has-space @cur-piece updated
+                             #(and (< -1 (last %) 10)
+                                   (< (first %) 20)))
+        (mc/with-cur-piece (reset! cur-piece updated))))))
 
 (defn flip-cur-piece []
   (rotate-cur-piece coord-rotate-cw)
   (rotate-cur-piece coord-rotate-cw))
 
 (defn hard-drop-cur-piece []
-  (while (piece-can-fall @cur-piece)
-    (mc/with-cur-piece (swap! cur-piece move-piece 0 inc)))
+  (when (some? @cur-piece)
+    (while (piece-can-fall @cur-piece)
+      (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))))
   (spawn-piece))
 
 ;; timers
@@ -118,6 +121,7 @@
     "s" (rotate-cur-piece coord-rotate-ccw)
     "a" (flip-cur-piece)
     " " (hard-drop-cur-piece)
+    "f" (.log js/console (str (move-piece nil 1 inc)))
     (.log js/console (str "unhandled key " (.-key e)))))
 
 ;; components

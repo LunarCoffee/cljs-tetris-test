@@ -2,6 +2,6 @@
 
 (defmacro with-cur-piece [& body]
   `(do
-     (~'update-field-cur-piece false)
+     (~'draw-cur-piece false)
      ~@body
-     (~'update-field-cur-piece true)))
+     (~'draw-cur-piece true)))
