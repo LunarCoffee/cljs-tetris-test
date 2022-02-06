@@ -5,10 +5,20 @@
   (:require-macros
    [cljs-tetris-test.macros :as mc]))
 
-(def field (r/atom (vec (repeat 20 (vec (repeat 10 "black"))))))
+(defn rvec [n item]
+  (vec (repeat n item)))
+
+(def field (r/atom (rvec 20 (rvec 10 "black"))))
 (def cur-piece (atom nil))
 
+;; TODO make configurable
+(def drop-delay-regular 15)
+(def drop-delay-soft-drop 3)
+
+(def drop-delay-timer (atom 0))
 (def lock-delay-timer (atom 0))
+
+(def drop-delay (atom 15))
 
 (defn rand-piece-kind []
   (rand-nth [:i :o :s :z :j :l :t]))
@@ -65,17 +75,17 @@
   (draw-piece (get-shadow-piece @cur-piece) on)
   (draw-piece @cur-piece on))
 
+(defn clear-lines []
+  (let [remaining (remove (partial every? #(not= "black" %)) @field)
+        n-cleared (- 20 (count remaining))]
+    (reset! field (vec (concat (rvec n-cleared (rvec 10 "black")) remaining)))))
+
 (defn hard-drop-cur-piece []
   (when (some? @cur-piece)
     (while (piece-can-fall @cur-piece)
       (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))))
+  (clear-lines)
   (spawn-piece))
-
-(defn frame-update []
-  (when (> @lock-delay-timer 0)
-    (swap! lock-delay-timer dec)
-    (when (zero? @lock-delay-timer)
-      (hard-drop-cur-piece))))
 
 (defn frame-drop-cur-piece []
   (when (some? @cur-piece)
@@ -83,6 +93,17 @@
       (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))
       (when (zero? @lock-delay-timer)
         (reset! lock-delay-timer 30)))))
+
+(defn frame-update []
+  (when (> @lock-delay-timer 0)
+    (swap! lock-delay-timer dec)
+    (when (zero? @lock-delay-timer)
+      (hard-drop-cur-piece)))
+  (case @drop-delay-timer
+    0 (do
+        (frame-drop-cur-piece)
+        (reset! drop-delay-timer @drop-delay))
+    (swap! drop-delay-timer dec)))
 
 (defn move-cur-piece-x [dir]
   (when (some? @cur-piece)
@@ -115,10 +136,14 @@
   (rotate-cur-piece coord-rotate-cw)
   (rotate-cur-piece coord-rotate-cw))
 
-;; timers
+(defn activate-soft-drop []
+  (reset! drop-delay drop-delay-soft-drop)
+  (reset! drop-delay-timer 0))  ;; don't wait for the old delay to end
+
+(defn deactivate-soft-drop []
+  (reset! drop-delay drop-delay-regular))
 
 (defonce frame-updater (js/setInterval frame-update 16))
-(defonce cur-piece-updater (js/setInterval frame-drop-cur-piece 250))
 
 ;; event handlers
 
@@ -127,11 +152,16 @@
     "ArrowLeft" (move-cur-piece-x dec)
     "ArrowRight" (move-cur-piece-x inc)
     "ArrowUp" (rotate-cur-piece coord-rotate-cw)
+    "ArrowDown" (activate-soft-drop)
     "s" (rotate-cur-piece coord-rotate-ccw)
     "a" (flip-cur-piece)
     " " (hard-drop-cur-piece)
-    "f" (.log js/console (str (move-piece nil 1 inc)))
     (.log js/console (str "unhandled key " (.-key e)))))
+
+(defn event-key-up [e]
+  (case (.-key e)
+    "ArrowDown" (deactivate-soft-drop)
+    ()))
 
 ;; components
 
@@ -147,7 +177,8 @@
 (defn playfield [field]
   [:div {:class "playfield"
          :tab-index 0
-         :on-key-down event-key-down}
+         :on-key-down event-key-down
+         :on-key-up event-key-up}
    (for [[i row] (map-indexed vector field)]
      ^{:key i} [playfield-row row])])
 
