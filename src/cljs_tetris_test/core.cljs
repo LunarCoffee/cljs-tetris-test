@@ -10,18 +10,28 @@
 
 (def field (r/atom (rvec 20 (rvec 10 "black"))))
 (def cur-piece (atom nil))
+(def held-piece (atom nil))
 
 ;; TODO make configurable
 (def drop-delay-regular 15)
-(def drop-delay-soft-drop 3)
+(def drop-delay-soft-drop 1)
 
 (def drop-delay-timer (atom 0))
 (def lock-delay-timer (atom 0))
 
 (def drop-delay (atom 15))
 
+(defn gen-7-bag []
+  (shuffle [:i :o :s :z :j :l :t]))
+
+(def cur-bag (atom []))
+(def next-bag (atom (gen-7-bag)))
+
 (defn rand-piece-kind []
-  (rand-nth [:i :o :s :z :j :l :t]))
+  (when (empty? @cur-bag)
+    (reset! cur-bag @next-bag)
+    (reset! next-bag (gen-7-bag)))
+    (last (first (swap-vals! cur-bag pop))))
 
 (defn piece-start-pos [piece-kind]
   (case piece-kind
@@ -136,9 +146,19 @@
   (rotate-cur-piece coord-rotate-cw)
   (rotate-cur-piece coord-rotate-cw))
 
+(defn swap-hold-piece []
+  (mc/with-cur-piece
+    (let [cur-held @held-piece
+          cur-kind (first @cur-piece)]
+      (if (some? cur-held)
+        (reset! cur-piece @held-piece)
+        (spawn-piece))
+      (reset! held-piece [cur-kind (piece-start-pos cur-kind)]))))
+
 (defn activate-soft-drop []
-  (reset! drop-delay drop-delay-soft-drop)
-  (reset! drop-delay-timer 0))  ;; don't wait for the old delay to end
+  (when (= @drop-delay drop-delay-regular)
+    (reset! drop-delay-timer 0))
+  (reset! drop-delay drop-delay-soft-drop))
 
 (defn deactivate-soft-drop []
   (reset! drop-delay drop-delay-regular))
@@ -155,6 +175,7 @@
     "ArrowDown" (activate-soft-drop)
     "s" (rotate-cur-piece coord-rotate-ccw)
     "a" (flip-cur-piece)
+    "d" (swap-hold-piece)
     " " (hard-drop-cur-piece)
     (.log js/console (str "unhandled key " (.-key e)))))
 
@@ -167,7 +188,7 @@
 
 (defn block [color]
   [:div {:style {:background-color color}
-         :class "block"}])
+         :class (if (= color "black") "block-empty" "block")}])
 
 (defn playfield-row [row]
   [:div {:class "playfield-row"}
