@@ -14,14 +14,17 @@
 (def held-piece (r/atom nil))
 (def rotation-state (atom 0))
 
-;; TODO make configurable
-(def drop-delay-regular 15)
-(def drop-delay-soft-drop 1)
-
 (def drop-delay-timer (atom 0))
 (def lock-delay-timer (atom 0))
 
 (def drop-delay (atom 15))
+
+(def auto-shift-delay 110)
+(def auto-repeat-rate 0)
+(def soft-drop-factor ##Inf)
+
+(def move-key-pressed (atom false))
+(def move-key-dir (atom nil))
 
 (defn gen-7-bag []
   (shuffle [:i :o :s :z :j :l :t]))
@@ -36,7 +39,6 @@
   (last (first (swap-vals! cur-bag pop))))
 
 (defn peek-bag [n]
-  (.log js/console (str (take n (concat @cur-bag @next-bag))))
   (reverse (take-last n (concat @next-bag @cur-bag))))
 
 (defn piece-start-pos [piece-kind]
@@ -72,6 +74,15 @@
     (reset! cur-piece [kind (piece-start-pos kind)])
     (reset! rotation-state 0)))
 
+(defn reset-game []
+  (reset! field (rvec 20 (rvec 10 "black")))
+  (reset! held-piece nil)
+  (reset! drop-delay-timer 0)
+  (reset! lock-delay-timer 0)
+  (reset! cur-bag [])
+  (reset! next-bag (gen-7-bag))
+  (spawn-piece))
+
 (defn move-piece [piece dir shift-fn]
   (update piece 1 (partial map #(update % dir shift-fn))))
 
@@ -85,10 +96,13 @@
   (let [updated (move-piece piece 0 inc)]
     (piece-has-space piece updated #(< (first %) 20))))
 
-(defn get-shadow-piece [piece]
+(defn project-piece-down [piece]
   (if (piece-can-fall piece)
     (recur (move-piece piece 0 inc))
-    (assoc piece 0 :shadow)))
+    piece))
+
+(defn get-shadow-piece [piece]
+  (assoc (project-piece-down piece) 0 :shadow))
 
 (defn draw-piece [piece on]
   (let [color (if on (piece-color (first piece)) "black")]
@@ -129,14 +143,29 @@
         (reset! drop-delay-timer @drop-delay))
     (swap! drop-delay-timer dec)))
 
-(defn move-cur-piece-x [dir]
+(defn move-cur-piece-x [dir repeat]
   (when (some? @cur-piece)
     (let [updated (move-piece @cur-piece 1 dir)]
-      (when (piece-has-space @cur-piece updated #(< -1 (last %) 10))
-        (mc/with-cur-piece (reset! cur-piece updated))))))
+      (when (and
+             @move-key-pressed
+             (piece-has-space @cur-piece updated #(< -1 (last %) 10)))
+        (mc/with-cur-piece (reset! cur-piece updated))
+        (when repeat
+          (if (zero? auto-repeat-rate)
+            (recur dir true)
+            (js/setTimeout #(move-cur-piece-x dir true) auto-repeat-rate)))))))
 
 (defn piece-center-coords [piece]
-  (if (= :s (first piece)) 3 2))  ;; non-standard pivot for i piece :(
+  (case (first piece)
+    :s (get (vec (last piece)) 3)
+    :i (let [second-block (get (vec (last piece)) 1)]
+         (map + second-block
+              (case @rotation-state
+                0 [0.5 0.5]
+                1 [0.5 -0.5]
+                2 [-0.5 -0.5]
+                3 [-0.5 0.5])))
+    (get (vec (last piece)) 2)))
 
 (defn coord- [[a b] [c d]] [(- a c) (- b d)])
 (defn coord+ [[a b] [c d]] [(+ a c) (+ b d)])
@@ -145,7 +174,7 @@
 (defn coord-rotate-ccw [[a b]] [(- b) a])
 
 (defn rotate-piece [piece dir]
-  (let [center (get (vec (last piece)) (piece-center-coords piece))]
+  (let [center (piece-center-coords piece)]
     (update piece 1 (partial map #(coord+ center (dir (coord- % center)))))))
 
 ;; srs
@@ -153,7 +182,7 @@
   (let [from-state (if (zero? dir) state (mod (- state 1) 4))
         kicks (if (= piece-kind :i)
                 (case from-state
-                  0 [[0 0] [0 -2] [0 1] [-1 -2] [2 1]]  ;; lol irrelevant since we use the wrong pivot for i
+                  0 [[0 0] [0 -2] [0 1] [-1 -2] [2 1]]
                   1 [[0 0] [0 -1] [0 2] [2 -1] [-1 2]]
                   2 [[0 0] [0 2] [0 -1] [1 2] [-2 -1]]
                   [[0 0] [0 1] [0 -2] [-2 1] [1 -2]])
@@ -179,7 +208,9 @@
                       (first))]
       (when (some? kicked)
         (mc/with-cur-piece (reset! cur-piece kicked))
-        (swap! rotation-state #(mod ((if (= direction 0) inc dec) %) 4))))))
+        (swap! rotation-state #(mod ((if (= direction 0) inc dec) %) 4))
+        (when @move-key-pressed
+          (move-cur-piece-x @move-key-dir true))))))
 
 (defn flip-cur-piece []
   (rotate-cur-piece coord-rotate-cw)
@@ -194,32 +225,53 @@
         (spawn-piece))
       (reset! held-piece [cur-kind (piece-start-pos cur-kind)]))))
 
+(def drop-delay-regular 15)
+(def soft-drop-activated (atom false))
+
 (defn activate-soft-drop []
-  (when (= @drop-delay drop-delay-regular)
-    (reset! drop-delay-timer 0))
-  (reset! drop-delay drop-delay-soft-drop))
+  (if (= ##Inf soft-drop-factor)
+    (mc/with-cur-piece (reset! cur-piece (project-piece-down @cur-piece)))
+    (do
+      (when (= @drop-delay drop-delay-regular)
+        (reset! drop-delay-timer 0))
+      (when (not @soft-drop-activated)
+        (swap! drop-delay #(/ % soft-drop-factor))
+        (reset! soft-drop-activated true)))))
 
 (defn deactivate-soft-drop []
+  (reset! soft-drop-activated false)
   (reset! drop-delay drop-delay-regular))
 
 (defonce frame-updater (js/setInterval frame-update 16))
 
 ;; event handlers
 
+(defn das-move-x [dir]
+  (reset! move-key-pressed true)
+  (reset! move-key-dir dir)
+  (move-cur-piece-x dir false)
+  (js/setTimeout #(move-cur-piece-x dir true) auto-shift-delay))
+
+(defn stop-move []
+  (reset! move-key-pressed false))
+
 (defn event-key-down [e]
   (case (.-key e)
-    "ArrowLeft" (move-cur-piece-x dec)
-    "ArrowRight" (move-cur-piece-x inc)
+    "ArrowLeft" (das-move-x dec)
+    "ArrowRight" (das-move-x inc)
     "ArrowUp" (rotate-cur-piece coord-rotate-cw)
     "ArrowDown" (activate-soft-drop)
     "s" (rotate-cur-piece coord-rotate-ccw)
     "a" (flip-cur-piece)
     "d" (swap-hold-piece)
     " " (hard-drop-cur-piece)
+    "`" (reset-game)
     (.log js/console (str "unhandled key " (.-key e)))))
 
 (defn event-key-up [e]
   (case (.-key e)
+    "ArrowLeft" (stop-move)
+    "ArrowRight" (stop-move)
     "ArrowDown" (deactivate-soft-drop)
     ()))
 
@@ -257,14 +309,14 @@
 (defn next-queue [peek-n]
   (let [queue (peek-bag peek-n)]
     [:div {:class "next-queue"}
-     (for [kind queue]
-       [single-piece-field [kind (piece-start-pos kind)] "queue-piece"])]))
+     (for [[i kind] (map-indexed vector queue)]
+       ^{:key i} [single-piece-field [kind (piece-start-pos kind)] "queue-piece"])]))
 
 ;; views
 
 (defn home-page []
   [:div
-   [:h2 "tetris gaming"]
+   [:h2 "tetris gaming!!1!"]
    [:div {:class "game-container"}
     [:div
      [:p "hold:"]
