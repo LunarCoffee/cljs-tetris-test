@@ -9,8 +9,9 @@
   (vec (repeat n item)))
 
 (def field (r/atom (rvec 20 (rvec 10 "black"))))
+
 (def cur-piece (atom nil))
-(def held-piece (atom nil))
+(def held-piece (r/atom nil))
 (def rotation-state (atom 0))
 
 ;; TODO make configurable
@@ -25,14 +26,18 @@
 (defn gen-7-bag []
   (shuffle [:i :o :s :z :j :l :t]))
 
-(def cur-bag (atom []))
-(def next-bag (atom (gen-7-bag)))
+(def cur-bag (r/atom []))
+(def next-bag (r/atom (gen-7-bag)))
 
 (defn rand-piece-kind []
   (when (empty? @cur-bag)
     (reset! cur-bag @next-bag)
     (reset! next-bag (gen-7-bag)))
   (last (first (swap-vals! cur-bag pop))))
+
+(defn peek-bag [n]
+  (.log js/console (str (take n (concat @cur-bag @next-bag))))
+  (reverse (take-last n (concat @next-bag @cur-bag))))
 
 (defn piece-start-pos [piece-kind]
   (case piece-kind
@@ -43,6 +48,13 @@
     :j [[0 3] [1 3] [1 4] [1 5]]
     :l [[0 5] [1 3] [1 4] [1 5]]
     :t [[0 4] [1 3] [1 4] [1 5]]))
+
+(defn piece-bounding-box-size [piece-kind]
+  (let [start-pos (piece-start-pos piece-kind)
+        row (mapv first start-pos)
+        col (mapv last start-pos)]
+    [(- (apply max row) (apply min row) -1)
+     (- (apply max col) (apply min col) -1)]))
 
 (defn piece-color [piece-kind]
   (case piece-kind
@@ -154,7 +166,6 @@
 
 (defn rotate-cur-piece [dir]
   (when (and (some? @cur-piece) (not= :o (first @cur-piece)))
-    (.log js/console (str @rotation-state))
     (let [rotated (rotate-piece @cur-piece dir)
           direction (if (= dir coord-rotate-cw) 0 1)
           bounds-pred #(and (< -1 (last %) 10) (< (first %) 20))
@@ -166,11 +177,9 @@
                                  (move-piece 1 #(+ % col-kick)))))
                       (filter #(piece-has-space @cur-piece % bounds-pred))
                       (first))]
-      (.log js/console (str kicks))
       (when (some? kicked)
         (mc/with-cur-piece (reset! cur-piece kicked))
-        (swap! rotation-state #(mod ((if (= direction 0) inc dec) %) 4))))
-    (.log js/console rotation-state)))
+        (swap! rotation-state #(mod ((if (= direction 0) inc dec) %) 4))))))
 
 (defn flip-cur-piece []
   (rotate-cur-piece coord-rotate-cw)
@@ -220,26 +229,50 @@
   [:div {:style {:background-color color}
          :class (if (= color "black") "block-empty" "block")}])
 
-(defn playfield-row [row]
+(defn piece-field-row [row]
   [:div {:class "playfield-row"}
    (for [[i cell] (map-indexed vector row)]
      ^{:key i} [block cell])])
 
-(defn playfield [field]
-  [:div {:class "playfield"
+(defn piece-field [field class]
+  [:div {:class class
          :tab-index 0
          :on-key-down event-key-down
          :on-key-up event-key-up}
    (for [[i row] (map-indexed vector field)]
-     ^{:key i} [playfield-row row])])
+     ^{:key i} [piece-field-row row])])
+
+(defn single-piece-field [piece class]
+  (if (some? piece)
+    (let [piece-kind (first piece)
+          shift (if (= piece-kind :o) 4 3)  ;; to move coords to start at 0
+          [row-bound col-bound] (piece-bounding-box-size piece-kind)
+          single-field (reduce
+                        #(assoc-in %1 %2 (piece-color piece-kind))
+                        (rvec row-bound (rvec col-bound "black"))
+                        (map (fn [[row col]] [row (- col shift)]) (last piece)))]
+      [piece-field single-field class])
+    [:div {:class class}]))
+
+(defn next-queue [peek-n]
+  (let [queue (peek-bag peek-n)]
+    [:div {:class "next-queue"}
+     (for [kind queue]
+       [single-piece-field [kind (piece-start-pos kind)] "queue-piece"])]))
 
 ;; views
 
 (defn home-page []
   [:div
    [:h2 "tetris gaming"]
-   [playfield @field]
-   [:p "hold: " (str (first @held-piece))]])
+   [:div {:class "game-container"}
+    [:div
+     [:p "hold:"]
+     [single-piece-field @held-piece "held-field"]]
+    [piece-field @field "playfield"]
+    [:div
+     [:p "next:"]
+     [next-queue 5]]]])
 
 ;; initialization
 
