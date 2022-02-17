@@ -11,6 +11,7 @@
 (def field (r/atom (rvec 20 (rvec 10 "black"))))
 (def cur-piece (atom nil))
 (def held-piece (atom nil))
+(def rotation-state (atom 0))
 
 ;; TODO make configurable
 (def drop-delay-regular 15)
@@ -31,7 +32,7 @@
   (when (empty? @cur-bag)
     (reset! cur-bag @next-bag)
     (reset! next-bag (gen-7-bag)))
-    (last (first (swap-vals! cur-bag pop))))
+  (last (first (swap-vals! cur-bag pop))))
 
 (defn piece-start-pos [piece-kind]
   (case piece-kind
@@ -56,7 +57,8 @@
 
 (defn spawn-piece []
   (let [kind (rand-piece-kind)]
-    (reset! cur-piece [kind (piece-start-pos kind)])))
+    (reset! cur-piece [kind (piece-start-pos kind)])
+    (reset! rotation-state 0)))
 
 (defn move-piece [piece dir shift-fn]
   (update piece 1 (partial map #(update % dir shift-fn))))
@@ -134,13 +136,41 @@
   (let [center (get (vec (last piece)) (piece-center-coords piece))]
     (update piece 1 (partial map #(coord+ center (dir (coord- % center)))))))
 
+;; srs
+(defn piece-kick-table [piece-kind state dir]
+  (let [from-state (if (zero? dir) state (mod (- state 1) 4))
+        kicks (if (= piece-kind :i)
+                (case from-state
+                  0 [[0 0] [0 -2] [0 1] [-1 -2] [2 1]]  ;; lol irrelevant since we use the wrong pivot for i
+                  1 [[0 0] [0 -1] [0 2] [2 -1] [-1 2]]
+                  2 [[0 0] [0 2] [0 -1] [1 2] [-2 -1]]
+                  [[0 0] [0 1] [0 -2] [-2 1] [1 -2]])
+                (case from-state
+                  0 [[0 0] [0 -1] [1 -1] [-2 0] [-2 -1]]
+                  1 [[0 0] [0 1] [-1 1] [2 0] [2 1]]
+                  2 [[0 0] [0 1] [1 1] [-2 0] [-2 1]]
+                  [[0 0] [0 -1] [-1 -1] [2 0] [2 -1]]))]
+    (if (zero? dir) kicks (map #(map - %) kicks))))
+
 (defn rotate-cur-piece [dir]
   (when (and (some? @cur-piece) (not= :o (first @cur-piece)))
-    (let [updated (rotate-piece @cur-piece dir)]
-      (when (piece-has-space @cur-piece updated
-                             #(and (< -1 (last %) 10)
-                                   (< (first %) 20)))
-        (mc/with-cur-piece (reset! cur-piece updated))))))
+    (.log js/console (str @rotation-state))
+    (let [rotated (rotate-piece @cur-piece dir)
+          direction (if (= dir coord-rotate-cw) 0 1)
+          bounds-pred #(and (< -1 (last %) 10) (< (first %) 20))
+          kicks (piece-kick-table (first rotated) @rotation-state direction)
+          kicked (->> kicks
+                      (map (fn [[row-kick col-kick]]
+                             (-> rotated
+                                 (move-piece 0 #(- % row-kick))
+                                 (move-piece 1 #(+ % col-kick)))))
+                      (filter #(piece-has-space @cur-piece % bounds-pred))
+                      (first))]
+      (.log js/console (str kicks))
+      (when (some? kicked)
+        (mc/with-cur-piece (reset! cur-piece kicked))
+        (swap! rotation-state #(mod ((if (= direction 0) inc dec) %) 4))))
+    (.log js/console rotation-state)))
 
 (defn flip-cur-piece []
   (rotate-cur-piece coord-rotate-cw)
@@ -208,7 +238,8 @@
 (defn home-page []
   [:div
    [:h2 "tetris gaming"]
-   [playfield @field]])
+   [playfield @field]
+   [:p "hold: " (str (first @held-piece))]])
 
 ;; initialization
 
