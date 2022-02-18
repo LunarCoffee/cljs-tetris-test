@@ -17,11 +17,12 @@
 (def drop-delay-timer (atom 0))
 (def lock-delay-timer (atom 0))
 
-(def drop-delay (atom 15))
+(def drop-delay-regular 25)
+(def drop-delay (atom drop-delay-regular))
 
-(def auto-shift-delay 110)
-(def auto-repeat-rate 0)
-(def soft-drop-factor ##Inf)
+(def auto-shift-delay (r/atom 110))
+(def auto-repeat-rate (r/atom 0))
+(def soft-drop-delay (r/atom 0))
 
 (def move-key-pressed (atom false))
 (def move-key-dir (atom nil))
@@ -69,20 +70,6 @@
     :t "magenta"
     :shadow "#222"))
 
-(defn spawn-piece []
-  (let [kind (rand-piece-kind)]
-    (reset! cur-piece [kind (piece-start-pos kind)])
-    (reset! rotation-state 0)))
-
-(defn reset-game []
-  (reset! field (rvec 20 (rvec 10 "black")))
-  (reset! held-piece nil)
-  (reset! drop-delay-timer 0)
-  (reset! lock-delay-timer 0)
-  (reset! cur-bag [])
-  (reset! next-bag (gen-7-bag))
-  (spawn-piece))
-
 (defn move-piece [piece dir shift-fn]
   (update piece 1 (partial map #(update % dir shift-fn))))
 
@@ -95,6 +82,22 @@
 (defn piece-can-fall [piece]
   (let [updated (move-piece piece 0 inc)]
     (piece-has-space piece updated #(< (first %) 20))))
+
+(defn spawn-piece []
+  (let [kind (rand-piece-kind)]
+    (reset! cur-piece [kind (piece-start-pos kind)])
+    (reset! rotation-state 0)
+    (when-not (piece-has-space [nil []] @cur-piece (fn [_] true))
+      (reset! cur-piece nil))))
+
+(defn reset-game []
+  (reset! field (rvec 20 (rvec 10 "black")))
+  (reset! held-piece nil)
+  (reset! drop-delay-timer 0)
+  (reset! lock-delay-timer 0)
+  (reset! cur-bag [])
+  (reset! next-bag (gen-7-bag))
+  (spawn-piece))
 
 (defn project-piece-down [piece]
   (if (piece-can-fall piece)
@@ -123,7 +126,8 @@
     (while (piece-can-fall @cur-piece)
       (mc/with-cur-piece (swap! cur-piece move-piece 0 inc))))
   (clear-lines)
-  (spawn-piece))
+  (spawn-piece)
+  (draw-cur-piece true))
 
 (defn frame-drop-cur-piece []
   (when (some? @cur-piece)
@@ -151,9 +155,9 @@
              (piece-has-space @cur-piece updated #(< -1 (last %) 10)))
         (mc/with-cur-piece (reset! cur-piece updated))
         (when repeat
-          (if (zero? auto-repeat-rate)
+          (if (zero? @auto-repeat-rate)
             (recur dir true)
-            (js/setTimeout #(move-cur-piece-x dir true) auto-repeat-rate)))))))
+            (js/setTimeout #(move-cur-piece-x dir true) @auto-repeat-rate)))))))
 
 (defn piece-center-coords [piece]
   (case (first piece)
@@ -223,34 +227,36 @@
       (if (some? cur-held)
         (reset! cur-piece @held-piece)
         (spawn-piece))
-      (reset! held-piece [cur-kind (piece-start-pos cur-kind)]))))
+      (reset! held-piece [cur-kind (piece-start-pos cur-kind)])
+      (reset! rotation-state 0))))
 
-(def drop-delay-regular 15)
 (def soft-drop-activated (atom false))
 
 (defn activate-soft-drop []
-  (if (= ##Inf soft-drop-factor)
+  (if (zero? @soft-drop-delay)
     (mc/with-cur-piece (reset! cur-piece (project-piece-down @cur-piece)))
     (do
       (when (= @drop-delay drop-delay-regular)
         (reset! drop-delay-timer 0))
       (when (not @soft-drop-activated)
-        (swap! drop-delay #(/ % soft-drop-factor))
+        (reset! drop-delay @soft-drop-delay)
         (reset! soft-drop-activated true)))))
 
 (defn deactivate-soft-drop []
   (reset! soft-drop-activated false)
-  (reset! drop-delay drop-delay-regular))
+  (reset! drop-delay drop-delay-regular)
+  (.log js/console (str @drop-delay)))
 
 (defonce frame-updater (js/setInterval frame-update 16))
 
 ;; event handlers
 
 (defn das-move-x [dir]
-  (reset! move-key-pressed true)
-  (reset! move-key-dir dir)
-  (move-cur-piece-x dir false)
-  (js/setTimeout #(move-cur-piece-x dir true) auto-shift-delay))
+  (when (not @move-key-pressed)
+    (reset! move-key-pressed true)
+    (reset! move-key-dir dir)
+    (move-cur-piece-x dir false)
+    (js/setTimeout #(move-cur-piece-x dir true) @auto-shift-delay)))
 
 (defn stop-move []
   (reset! move-key-pressed false))
@@ -314,17 +320,34 @@
 
 ;; views
 
+(defn integer-slider [atom min max]
+  [:input {:type "range"
+           :min min
+           :max max
+           :value @atom
+           :on-change #(reset! atom (-> % .-target .-value))}])
+
 (defn home-page []
-  [:div
-   [:h2 "tetris gaming!!1!"]
-   [:div {:class "game-container"}
-    [:div
-     [:p "hold:"]
-     [single-piece-field @held-piece "held-field"]]
-    [piece-field @field "playfield"]
-    [:div
-     [:p "next:"]
-     [next-queue 5]]]])
+  [:div {:class "site-container"}
+   [:div
+    [:h2 "tetris gaming"]
+    [:div {:class "game-container"}
+     [:div
+      [:p "hold:"]
+      [single-piece-field @held-piece "held-field"]]
+     [piece-field @field "playfield"]
+     [:div
+      [:p "next:"]
+      [next-queue 5]]]]
+   [:div {:class "config-container"}
+    [:label "das (" @auto-shift-delay "): "] [:br]
+    [integer-slider auto-shift-delay 0 500]
+    [:br]
+    [:label "arr (" @auto-repeat-rate "): "] [:br]
+    [integer-slider auto-repeat-rate 0 500]
+    [:br]
+    [:label "sdd (" @soft-drop-delay "): "] [:br]
+    [integer-slider soft-drop-delay 0 25]]])
 
 ;; initialization
 

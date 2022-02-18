@@ -1,6 +1,6 @@
 body {
   font-family: 'Helvetica Neue', Verdana, Helvetica, Arial, sans-serif;
-  max-width: 600px;
+  width: 750px;
   margin: 0 auto;
   padding-top: 72px;
   -webkit-font-smoothing: antialiased;
@@ -48,8 +48,9 @@ br {
   padding: 0;
 }
 
-.block-empty {
-  /* border: 1px inset #222; */
+.site-container {
+  display: flex;
+  flex-direction: row;
 }
 
 .game-container {
@@ -62,6 +63,7 @@ br {
   display: inline-flex;
   flex-direction: column;
   border: 1px solid #222;
+  margin: 0 30px;
 }
 
 .playfield-row {
@@ -86,4 +88,9 @@ br {
 
 .queue-piece {
   margin-bottom: 30px;
+}
+
+.config-container {
+  margin-left: 60px;
+  margin-top: 200px;
 }
